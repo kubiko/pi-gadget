@@ -37,6 +37,13 @@ parts:
         DESTDIR=${SNAPCRAFT_PART_INSTALL} \
         ARCH="$(dpkg-architecture -t $BUILD_ARCH_TRIPLET -q DEB_HOST_ARCH)" \
         ${OPTIONAL_ARGS:-}
+      sed -i \
+          -e '/setenv kernel_bootpart/a setenv psplash_file "psplash.img"\nsetenv psplash_part "1"' \
+          -e 's/setenv ramdisk_param "${.*/setenv ramdisk_size "${filesize}"\n      setenv ramdisk_param "${ramdisk_addr_r}:${ramdisk_size}"/g' \
+          -e '/for cmd in ${try_boot}; do/i \    if test -e ${devtype} ${devnum}:${psplash_part} ${psplash_file}; then setexpr psplash_addr ${ramdisk_addr_r} + 0x${ramdisk_size}; load ${devtype} ${devnum}:${psplash_part} ${psplash_addr} ${psplash_file}; setenv psplash_size "${filesize}"; setexpr ramdisk_size 0x${ramdisk_size} + 0x${psplash_size}; setenv ramdisk_param "${ramdisk_addr_r}:${ramdisk_size}"; fi' \
+          stage/bootscr.rpi
+      mkimage -A arm64 -O linux -T script -C none -n "boot script" \
+              -d stage/bootscr.rpi ${SNAPCRAFT_PART_INSTALL}/boot-assets/boot.scr
     prime:
       - boot-assets/*
       - uboot.conf
@@ -55,48 +62,50 @@ parts:
   psplash:
     after: [psplash-local]
     source: git://git.yoctoproject.org/psplash
-    source-commit: 2015f7073e98dd9562db0936a254af5ef56356cf
-    plugin: nil
+    source-commit: 0a902f7cd875ccf018456451be369f05fa55f962
+    plugin: autotools
+    autotools-configure-parameters:
+      - --build=${SNAPCRAFT_ARCH_TRIPLET}
+      - --host=${SNAPCRAFT_ARCH_TRIPLET}
+      - --prefix=/usr
+      - --with-systemd
+      - --with-font=ubuntu
+      - CC=${SNAPCRAFT_ARCH_TRIPLET}-gcc
+      - LIBS="-lsystemd"
+    override-pull: |
+      snapcraftctl pull
+      sed -i 's/POKY_IMG/CORE_IMG/g' psplash.c
+      otf2bdf -p 22 -r 75 -v \
+        $(ls /usr/share/fonts/truetype/*/Ubuntu-R.ttf) \
+        -o ubuntu.bdf || res=$?
+      if [ "$res" != "8" ]; then
+        echo "Unexpected exit code from otf2bdf, should be 8"
+        exit 1
+      fi
+      bdftobogl ubuntu.bdf > ubuntu-font.h
+      sed -i \
+          -e 's/#include "bogl\.h"/#include "psplash\.h"/g' \
+          -e 's/struct bogl_font font_ubuntu/PSplashFont ubuntu_font/g' \
+          ubuntu-font.h
     override-build: |
       set -x
-      if [ "$SNAPCRAFT_ARCH_TRIPLET" = "x86_64-linux-gnu" ] || [ -z "$SNAPCRAFT_ARCH_TRIPLET" ]; then
-        # manually set since new snapcraft doesn't like --target-arch when 
-        # building with lxd/multipass
-        BUILD_ARCH_TRIPLET=aarch64-linux-gnu
-      else
-        BUILD_ARCH_TRIPLET=$SNAPCRAFT_ARCH_TRIPLET
-      fi
-      export TREE="${SNAPCRAFT_STAGE:-.}/psplash"
-      . ${TREE}/config
-      if ! $(echo "$FONT" | grep -q ^/); then
-        FONT="${TREE}/${FONT}"
-      fi
-      if ! $(echo "$SPLASH" | grep -q ^/); then
-        SPLASH="${TREE}/${SPLASH}"
-      fi
-      git apply ${TREE}/psplash.patch
-      ${TREE}/font-gen.sh "$FONT"
-      ./make-image-header.sh "$SPLASH" CORE psplash-core
-      aclocal
-      autoreconf --install
-      if ! dpkg-architecture -t "${SNAPCRAFT_ARCH_TRIPLET}" -e \
-          $(dpkg-architecture -q DEB_BUILD_ARCH)
-      then
-        export CROSS_COMPILE=$(dpkg-architecture \
-          -t "${BUILD_ARCH_TRIPLET}" -q DEB_HOST_GNU_TYPE)-
-      else
-        export CROSS_COMPILE=
-      fi
-      ./configure --build=$(dpkg-architecture -q DEB_BUILD_GNU_TYPE) \
-        --host=${BUILD_ARCH_TRIPLET} CC=${CROSS_COMPILE}gcc || cat config.log
-      ARCH=$(dpkg-architecture -t "${BUILD_ARCH_TRIPLET}" -q DEB_HOST_ARCH) make
-      rm -rf $SNAPCRAFT_PART_INSTALL/usr
-      cp -a $TREE/initrd .
-      mkdir -p initrd/bin
-      cp psplash initrd/bin
-      mkdir -p $SNAPCRAFT_PART_INSTALL/boot-assets
-      cd initrd && find . | cpio --quiet -o -H newc | lz4 -9 -l >> \
-        "${SNAPCRAFT_PART_INSTALL}/boot-assets/psplash.img"
+      # convert image asset
+      ln -sf ${SNAPCRAFT_STAGE}/psplash/core_orange_hex.png psplash-core.png
+      ./make-image-header.sh psplash-core.png CORE
+      sed -i \
+          -e 's/psplash-poky-img.h/psplash-core-img.h/g' \
+          Makefile.am psplash.c
+      git apply ${SNAPCRAFT_STAGE}/psplash/psplash.patch
+      snapcraftctl build
+
+      cp -r ${SNAPCRAFT_STAGE}/psplash/initrd/* ${SNAPCRAFT_PART_INSTALL}
+      cd ${SNAPCRAFT_PART_INSTALL} && find . | cpio --quiet -o -H newc | lz4 -9 -l >> \
+        "${SNAPCRAFT_PART_BUILD}/psplash.img"
+      cd ${SNAPCRAFT_PART_BUILD}
+      mkdir -p ${SNAPCRAFT_PART_INSTALL}/boot-assets
+      cp psplash.img ${SNAPCRAFT_PART_INSTALL}/boot-assets/
+    stage:
+      - boot-assets/psplash.img
     build-packages:
       - libgdk-pixbuf2.0-dev
       - automake
@@ -109,6 +118,7 @@ parts:
       - findutils
       - liblz4-tool
       - libc-dev
+      - libsystemd-dev
       - try:
           - gcc-aarch64-linux-gnu:amd64
           - libc6-dev-arm64-cross:amd64

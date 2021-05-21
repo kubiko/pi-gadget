@@ -1,0 +1,14 @@
+[Unit]
+Description=Start psplash boot splash screen
+DefaultDependencies=no
+RequiresMountsFor=/run
+Requires=systemd-modules-load.service
+After=systemd-modules-load.service
+
+[Service]
+Type=notify
+ExecStart=@/usr/bin/psplash @psplash
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target
