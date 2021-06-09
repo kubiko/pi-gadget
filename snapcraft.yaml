@@ -37,13 +37,14 @@ parts:
         DESTDIR=${SNAPCRAFT_PART_INSTALL} \
         ARCH="$(dpkg-architecture -t $BUILD_ARCH_TRIPLET -q DEB_HOST_ARCH)" \
         ${OPTIONAL_ARGS:-}
+      cp ${SNAPCRAFT_PART_SRC}/stage/bootscr.rpi ${SNAPCRAFT_PART_BUILD}/bootscr.rpi
       sed -i \
           -e '/setenv kernel_bootpart/a setenv psplash_file "psplash.img"\nsetenv psplash_part "1"' \
           -e 's/setenv ramdisk_param "${.*/setenv ramdisk_size "${filesize}"\n      setenv ramdisk_param "${ramdisk_addr_r}:${ramdisk_size}"/g' \
           -e '/for cmd in ${try_boot}; do/i \    if test -e ${devtype} ${devnum}:${psplash_part} ${psplash_file}; then setexpr psplash_addr ${ramdisk_addr_r} + 0x${ramdisk_size}; load ${devtype} ${devnum}:${psplash_part} ${psplash_addr} ${psplash_file}; setenv psplash_size "${filesize}"; setexpr ramdisk_size 0x${ramdisk_size} + 0x${psplash_size}; setenv ramdisk_param "${ramdisk_addr_r}:${ramdisk_size}"; fi' \
-          stage/bootscr.rpi
+          ${SNAPCRAFT_PART_BUILD}/bootscr.rpi
       mkimage -A arm64 -O linux -T script -C none -n "boot script" \
-              -d stage/bootscr.rpi ${SNAPCRAFT_PART_INSTALL}/boot-assets/boot.scr
+              -d ${SNAPCRAFT_PART_BUILD}/bootscr.rpi ${SNAPCRAFT_PART_INSTALL}/boot-assets/boot.scr
     prime:
       - boot-assets/*
       - uboot.conf
